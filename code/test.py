@@ -59,6 +59,7 @@ def main():
     parser.add_argument('--ckpt', type=str, default='/userhome/NewIBSN/EditGuard_open/checkpoints/clean.pth', help='Path to pre-trained model.')
     parser.add_argument('--local_rank', type=int, default=0)
     parser.add_argument('--mask', type=int, default=0)
+    parser.add_argument('--output_dir', type=str, default="results")
     args = parser.parse_args()
     opt = option.parse(args.opt, is_train=True)
 
@@ -113,7 +114,7 @@ def main():
     biterr = []
     idx = 0
     for image_id, val_data in enumerate(val_loader):
-        img_dir = os.path.join('results',opt['name'])
+        img_dir = os.path.join(args.output_dir, opt['name'])
         util.mkdir(img_dir)
 
         model.feed_data(val_data)
