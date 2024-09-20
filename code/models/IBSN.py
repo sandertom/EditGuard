@@ -14,6 +14,8 @@ from .modules.common import DWT,IWT
 from utils.jpegtest import JpegTest
 from utils.JPEG import DiffJPEG
 import utils.util as util
+from torchvision import transforms
+import torchvision.transforms.functional as F
 
 
 import numpy as np
@@ -30,6 +32,34 @@ from diffusers import StableDiffusionControlNetInpaintPipeline, ControlNetModel,
 from diffusers import StableDiffusionXLInpaintPipeline
 from diffusers.utils import load_image
 from diffusers import RePaintPipeline, RePaintScheduler
+
+
+class UpperLeftCrop(nn.Module):
+    def __init__(self, min_size=None, max_size=None):
+        super(UpperLeftCrop, self).__init__()
+        self.min_size = min_size
+        self.max_size = max_size
+    
+    def get_random_size(self, h, w):
+        if self.min_size is None or self.max_size is None:
+            raise ValueError("min_size and max_size must be provided")
+        output_size = (
+            torch.randint(int(self.min_size * h), int(self.max_size * h) + 1, size=(1, )).item(), 
+            torch.randint(int(self.min_size * w), int(self.max_size * w) + 1, size=(1, )).item()
+        )
+        return output_size
+
+    def forward(self, image, mask=None, size=None):
+        h, w = image.shape[-2:]
+        if size is None:
+            output_size = self.get_random_size(h, w)
+        else:
+            output_size = (int(size * h), int(size * w))
+        i, j, h, w = transforms.RandomCrop.get_params(image, output_size=output_size)
+        image = F.crop(image, 0, 0, h, w)
+        if mask is not None:
+            mask = F.crop(mask, 0, 0, h, w)
+        return image, mask
 
 class Model_VSN(BaseModel):
     def __init__(self, opt, mask=0):
@@ -51,7 +81,7 @@ class Model_VSN(BaseModel):
         self.num_image = opt['num_image']
         self.mode = opt["mode"]
         self.idxx = 0
-        self.mask = 0
+        self.mask = mask
 
         self.netG = networks.define_G_v2(opt).to(self.device)
         if opt['dist']:
@@ -323,7 +353,7 @@ class Model_VSN(BaseModel):
 
             self.optimizer_G.step()
 
-    def test(self, image_id):
+    def test(self, image_id, crop=False):
         self.netG.eval()
         add_noise = self.opt['addnoise']
         add_jpeg = self.opt['addjpeg']
@@ -333,6 +363,9 @@ class Model_VSN(BaseModel):
         add_sdxl = self.opt['sdxl']
         add_repaint = self.opt['repaint']
         degrade_shuffle = self.opt['degrade_shuffle']
+
+        crop_transform = UpperLeftCrop()
+        resize_transform = transforms.Resize((512, 512))
 
         with torch.no_grad():
             forw_L = []
@@ -355,7 +388,7 @@ class Model_VSN(BaseModel):
             # messagenp = np.random.choice([-0.5, 0.5], (self.ref_L.shape[0], self.opt['message_length']))
             # message = torch.Tensor(messagenp).to(self.device)
 
-            message = torch.Tensor([(int(i) - 1)/2 for i in "01001010000001010111010011010110"] + [(int(i) - 1)/2 for i in "01001010000001010111010011010110"]).to(self.device)
+            message = torch.Tensor([int(i) - 1/2 for i in "01001010000001010111010011010110"] + [(int(i) - 1)/2 for i in "01001010000001010111010011010110"]).to(self.device).unsqueeze(0)
 
             if self.opt['bitrecord']:
                 mymsg = message.clone()
@@ -377,7 +410,6 @@ class Model_VSN(BaseModel):
                 self.output, container = self.netG(x=dwt(self.host.reshape(b, -1, h, w)), x_h=self.secret, message=message)
                 y_forw = container
             else:
-                
                 message = torch.tensor(self.msg_list[image_id]).unsqueeze(0).cuda()
                 self.output = self.host
                 y_forw = self.output.squeeze(1)
@@ -391,24 +423,35 @@ class Model_VSN(BaseModel):
                 
                 image_batch = y_forw.permute(0, 2, 3, 1).detach().cpu().numpy()
                 forw_list = []
-
                 for j in range(b):
                     i = image_id + 1
                     # masksrc = "../dataset/valAGE-Set-Mask/"
                     # mask_image = Image.open(masksrc + str(i).zfill(4) + ".png").convert("L")
                     mask_image = Image.open(f"/private/home/tomsander/img_watermarking/src/augmentation/output/mask_multiple=1_number={self.mask}.png")
                     mask_image = mask_image.resize((512, 512))
-                    h, w = mask_image.size
-                    
                     image = image_batch[j, :, :, :]
+                    if crop:
+                        mask_image_tensor = torch.Tensor(np.array(mask_image)).unsqueeze(0)
+                        image_tensor = torch.Tensor(image).permute(2, 0, 1)
+                        image_tensor, mask_image_tensor = crop_transform(image_tensor, mask_image_tensor, size = 0.5)
+                        mask_image = resize_transform(mask_image_tensor).squeeze(0)
+                        image = np.array(resize_transform(image_tensor).permute(1, 2, 0))
+                        h, w = mask_image.shape
+                    else:
+                        h, w = mask_image.size
+                    
                     # image_init = Image.fromarray((image * 255).astype(np.uint8), mode = "RGB")
                     # image_inpaint = self.pipe(prompt=prompt, image=image_init, mask_image=mask_image, height=w, width=h).images[0]
                     # image_inpaint = np.array(image_inpaint) / 255.
                     mask_image = np.array(mask_image)
                     mask_image = np.stack([mask_image] * 3, axis=-1) / 255.
                     mask_image = mask_image.astype(np.uint8)
-                    img_ori = self.host[0].permute(0, 2, 3, 1)[0].detach().cpu().numpy()
-                    image_fuse = image * (1 - mask_image) + img_ori * mask_image
+                    if not crop:
+                        img_ori = self.host[0].permute(0, 2, 3, 1)[0].detach().cpu().numpy()
+                    else:
+                        img_ori, _ = crop_transform(self.host[0], size = 0.5)
+                        img_ori = resize_transform(img_ori).permute(0, 2, 3, 1)[0].detach().cpu().numpy()
+                    image_fuse = img_ori * (1 - mask_image) + image * mask_image
                     psnr = np.mean(10 * np.log10(1 / np.mean((image - img_ori) ** 2)))
                     print("PSNR:", psnr.item())
                     # image_fuse = image * (1 - mask_image) + image_inpaint * mask_image
@@ -612,7 +655,10 @@ class Model_VSN(BaseModel):
             self.fake_H_h = torch.clamp(torch.stack(fake_H_h, dim=2),0,1)
 
         self.forw_L = torch.clamp(torch.stack(forw_L, dim=1),0,1)
+        for i in range(32):
+            recmsglist[0][0, i] = (recmsglist[0][0, i] + recmsglist[0][0, 32+i])/2
         remesg = torch.clamp(torch.stack(recmsglist, dim=0),-0.5,0.5)
+        remesg = remesg[:, :, :32]
 
         if self.opt['hide']:
             mesg = torch.clamp(torch.stack(msglist, dim=0),-0.5,0.5)
@@ -622,17 +668,19 @@ class Model_VSN(BaseModel):
     
         self.recmessage = remesg.clone()
         
-        for i in range(32):
-            remesg[0, 0, i] = (remesg[0, 0, i] + remesg[0, 0, 32+i])/2
-        remesg = remesg[:, :, :32]
-        self.recmessage = self.recmessage[:, :, :32]
+        # self.recmessage = self.recmessage[:, :, :,
 
         self.recmessage[remesg > 0] = 1
         self.recmessage[remesg <= 0] = 0
 
-        self.message = mesg.clone()[:, :32]
-        self.message[mesg[:, :32] > 0] = 1
-        self.message[mesg[:, :32] <= 0] = 0
+        self.message = mesg.clone()[:, :, :32]
+        self.message[mesg[:, :, :32] > 0] = 1
+        self.message[mesg[:, :, :32] <= 0] = 0
+
+
+        # self.message = mesg.clone()
+        # self.message[mesg > 0] = 1
+        # self.message[mesg <= 0] = 0
 
         self.netG.train()
 

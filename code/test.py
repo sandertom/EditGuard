@@ -15,6 +15,16 @@ from data import create_dataloader, create_dataset
 from models import create_model
 import numpy as np
 
+def bool_inst(v):
+    if isinstance(v, bool):
+        return v
+    if v.lower() in ('yes', 'true', 't', 'y', '1'):
+        return True
+    elif v.lower() in ('no', 'false', 'f', 'n', '0'):
+        return False
+    else:
+        raise ValueError('Boolean value expected in args')
+
 
 def init_dist(backend='nccl', **kwargs):
     ''' initialization for distributed training'''
@@ -60,6 +70,7 @@ def main():
     parser.add_argument('--local_rank', type=int, default=0)
     parser.add_argument('--mask', type=int, default=0)
     parser.add_argument('--output_dir', type=str, default="results")
+    parser.add_argument('--crop', type=bool_inst, default=False)
     args = parser.parse_args()
     opt = option.parse(args.opt, is_train=True)
 
@@ -118,7 +129,7 @@ def main():
         util.mkdir(img_dir)
 
         model.feed_data(val_data)
-        model.test(image_id)
+        model.test(image_id, crop = args.crop)
 
         visuals = model.get_current_visuals()
 
