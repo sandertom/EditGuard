@@ -38,8 +38,10 @@ datasets:
     name: AGE-Set
     mode: td
 
-    data_path: ../dataset/valAGE-Set
-    txt_path:  ../dataset/sep_testlist.txt
+    # data_path: ../dataset/valAGE-Set
+    data_path: /private/home/tomsander/EditGuard/dataset/coco
+    # txt_path:  ../dataset/sep_testlist.txt
+    txt_path:  /private/home/tomsander/EditGuard/dataset/sep_testlist_coco.txt
 
     N_frames: 1
     padding: 'new_info'

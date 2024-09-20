@@ -58,6 +58,7 @@ def main():
                         help='job launcher')
     parser.add_argument('--ckpt', type=str, default='/userhome/NewIBSN/EditGuard_open/checkpoints/clean.pth', help='Path to pre-trained model.')
     parser.add_argument('--local_rank', type=int, default=0)
+    parser.add_argument('--mask', type=int, default=0)
     args = parser.parse_args()
     opt = option.parse(args.opt, is_train=True)
 
@@ -102,7 +103,7 @@ def main():
             raise NotImplementedError('Phase [{:s}] is not recognized.'.format(phase))
 
     # create model
-    model = create_model(opt)
+    model = create_model(opt, mask=args.mask)
     model.load_test(args.ckpt)
             
     # validation

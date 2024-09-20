@@ -32,7 +32,7 @@ from diffusers.utils import load_image
 from diffusers import RePaintPipeline, RePaintScheduler
 
 class Model_VSN(BaseModel):
-    def __init__(self, opt):
+    def __init__(self, opt, mask=0):
         super(Model_VSN, self).__init__(opt)
 
         if opt['dist']:
@@ -51,6 +51,7 @@ class Model_VSN(BaseModel):
         self.num_image = opt['num_image']
         self.mode = opt["mode"]
         self.idxx = 0
+        self.mask = 0
 
         self.netG = networks.define_G_v2(opt).to(self.device)
         if opt['dist']:
@@ -160,7 +161,7 @@ class Model_VSN(BaseModel):
     def feed_data(self, data):
         self.ref_L = data['LQ'].to(self.device)  
         self.real_H = data['GT'].to(self.device)
-        self.mes = data['MES']
+        # self.mes = data['MES']
 
     def init_hidden_state(self, z):
         b, c, h, w = z.shape
@@ -193,6 +194,7 @@ class Model_VSN(BaseModel):
         intval = self.gop // 2
 
         message = torch.Tensor(np.random.choice([-0.5, 0.5], (self.ref_L.shape[0], self.opt['message_length']))).to(self.device)
+        # message = torch.Tensor([(int(i) - 1)/2 for i in "01001010000001010111010011010110"]).to(self.device)
 
         add_noise = self.opt['addnoise']
         add_jpeg = self.opt['addjpeg']
@@ -350,9 +352,10 @@ class Model_VSN(BaseModel):
             self.secret = self.ref_L[:, :, center - intval+id:center + intval + 1+id]
             self.secret = [dwt(self.secret[:,i].reshape(b, -1, h, w)) for i in range(n)]
 
-            messagenp = np.random.choice([-0.5, 0.5], (self.ref_L.shape[0], self.opt['message_length']))
+            # messagenp = np.random.choice([-0.5, 0.5], (self.ref_L.shape[0], self.opt['message_length']))
+            # message = torch.Tensor(messagenp).to(self.device)
 
-            message = torch.Tensor(messagenp).to(self.device)
+            message = torch.Tensor([(int(i) - 1)/2 for i in "01001010000001010111010011010110"] + [(int(i) - 1)/2 for i in "01001010000001010111010011010110"]).to(self.device)
 
             if self.opt['bitrecord']:
                 mymsg = message.clone()
@@ -391,19 +394,24 @@ class Model_VSN(BaseModel):
 
                 for j in range(b):
                     i = image_id + 1
-                    masksrc = "../dataset/valAGE-Set-Mask/"
-                    mask_image = Image.open(masksrc + str(i).zfill(4) + ".png").convert("L")
+                    # masksrc = "../dataset/valAGE-Set-Mask/"
+                    # mask_image = Image.open(masksrc + str(i).zfill(4) + ".png").convert("L")
+                    mask_image = Image.open(f"/private/home/tomsander/img_watermarking/src/augmentation/output/mask_multiple=1_number={self.mask}.png")
                     mask_image = mask_image.resize((512, 512))
                     h, w = mask_image.size
                     
                     image = image_batch[j, :, :, :]
-                    image_init = Image.fromarray((image * 255).astype(np.uint8), mode = "RGB")
-                    image_inpaint = self.pipe(prompt=prompt, image=image_init, mask_image=mask_image, height=w, width=h).images[0]
-                    image_inpaint = np.array(image_inpaint) / 255.
+                    # image_init = Image.fromarray((image * 255).astype(np.uint8), mode = "RGB")
+                    # image_inpaint = self.pipe(prompt=prompt, image=image_init, mask_image=mask_image, height=w, width=h).images[0]
+                    # image_inpaint = np.array(image_inpaint) / 255.
                     mask_image = np.array(mask_image)
                     mask_image = np.stack([mask_image] * 3, axis=-1) / 255.
                     mask_image = mask_image.astype(np.uint8)
-                    image_fuse = image * (1 - mask_image) + image_inpaint * mask_image
+                    img_ori = self.host[0].permute(0, 2, 3, 1)[0].detach().cpu().numpy()
+                    image_fuse = image * (1 - mask_image) + img_ori * mask_image
+                    psnr = np.mean(10 * np.log10(1 / np.mean((image - img_ori) ** 2)))
+                    print("PSNR:", psnr.item())
+                    # image_fuse = image * (1 - mask_image) + image_inpaint * mask_image
                     forw_list.append(torch.from_numpy(image_fuse).permute(2, 0, 1))
                 
                 y_forw = torch.stack(forw_list, dim=0).float().cuda()
@@ -524,7 +532,7 @@ class Model_VSN(BaseModel):
 
             if degrade_shuffle:
                 import random
-                choice = random.randint(0, 2)
+                choice = random.randint(0, 1)
                 
                 if choice == 0:
                     NL = float((np.random.randint(1,5))/255)
@@ -611,13 +619,20 @@ class Model_VSN(BaseModel):
         else:
             mesg = torch.stack(msglist, dim=0)
 
+    
         self.recmessage = remesg.clone()
+        
+        for i in range(32):
+            remesg[0, 0, i] = (remesg[0, 0, i] + remesg[0, 0, 32+i])/2
+        remesg = remesg[:, :, :32]
+        self.recmessage = self.recmessage[:, :, :32]
+
         self.recmessage[remesg > 0] = 1
         self.recmessage[remesg <= 0] = 0
 
-        self.message = mesg.clone()
-        self.message[mesg > 0] = 1
-        self.message[mesg <= 0] = 0
+        self.message = mesg.clone()[:, :32]
+        self.message[mesg[:, :32] > 0] = 1
+        self.message[mesg[:, :32] <= 0] = 0
 
         self.netG.train()
 
