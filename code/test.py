@@ -53,7 +53,7 @@ def get_min_avg_and_indices(nums):
 def main():
     # options
     parser = argparse.ArgumentParser()
-    parser.add_argument('-opt', type=str, help='Path to option YMAL file.')
+    parser.add_argument('--opt', type=str, help='Path to option YMAL file.')
     parser.add_argument('--launcher', choices=['none', 'pytorch'], default='none',
                         help='job launcher')
     parser.add_argument('--ckpt', type=str, default='/userhome/NewIBSN/EditGuard_open/checkpoints/clean.pth', help='Path to pre-trained model.')
